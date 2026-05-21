@@ -2,32 +2,44 @@ name: Morning UPS Agent
 
 on:
   schedule:
-    # This runs at 8:00 AM India Time (Monday to Friday)
-    - cron: '30 2 * * 1-5' 
-  workflow_dispatch:      # This adds a "Run" button so you can test it manually
+    - cron: '30 2 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   run-agent:
     runs-on: ubuntu-latest
     steps:
-      # 1. Get your code from the repository
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v2
+        with:
+          persist-credentials: false
 
-      # 2. Prepare the computer with Python
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # 3. Install the tools needed (Pandas, Excel writer, etc.)
+      # Install all required libraries, including Selenium
       - name: Install Dependencies
         run: |
-          pip install pandas requests cloudscraper openpyxl matplotlib beautifulsoup4 lxml
+          pip install pandas openpyxl matplotlib beautifulsoup4 selenium webdriver-manager
+      
+      # Install Google Chrome for Selenium to use
+      - name: Install Google Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
 
-      # 4. Run your UPS Script
       - name: Run UPS Agent
         env:
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: python ups_agent.py
+      
+      # Commit the updated Excel file back to the repository
+      - name: Commit and Push Results
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "Automated UPS Data Update"
+          file_pattern: ups_fuel_history.xlsx
+
