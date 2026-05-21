@@ -1,7 +1,7 @@
 import pandas as pd
 import os
-import io
 import smtplib
+import time
 from datetime import datetime
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.drawing.image import Image as OpenpyxlImage
@@ -10,14 +10,13 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 import warnings
-import time
+from bs4 import BeautifulSoup
 
 # Selenium Imports
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
-from bs4 import BeautifulSoup
 
 warnings.filterwarnings('ignore')
 
@@ -26,77 +25,12 @@ UPS_URL = "https://www.ups.com/in/en/support/shipping-support/shipping-costs-rat
 EXCEL_FILE = "ups_fuel_history.xlsx"
 TEMP_GRAPH = "ups_plot.png"
 
-# --- EMAIL SECRETS (Passed securely from Cloud) ---
+# --- EMAIL SECRETS ---
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVERS = [EMAIL_SENDER]
-
-def get_live_data():
-    """Scrapes UPS using a real Chrome browser via Selenium."""
-    print("Launching Headless Chrome Browser for UPS...")
-    
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("window-size=1920,1080")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-    
-    try:
-        print(f"Navigating to UPS URL...")
-        driver.get(UPS_URL)
-        print("Waiting 10 seconds for page to fully load...")
-        time.sleep(10) # Wait for JavaScript tables to render
-        
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        driver.quit()
-        
-        tables = soup.find_all('table')
-        target_table = None
-        for table in tables:
-            if "Gulf Coast" in table.text:
-                target_table = table
-                break
-        
-        if not target_table:
-            print("Error: Could not find table structure after page load.")
-            return None
-            
-        data = []
-        for row in target_table.find_all('tr'):
-            cols = [ele.text.strip() for ele in row.find_all(['td', 'th'])]
-            if len(cols) >= 3 and any(c.isdigit() for c in cols[0]):
-                try:
-                    at_least = float(cols[0].replace('$', '').replace('USD', '').strip())
-                    less_than = float(cols[1].replace('$', '').replace('USD', '').strip())
-                    surcharge = float(cols[2].replace('%', '').replace(',', '.').strip())
-                    data.append([at_least, less_than, surcharge])
-                except ValueError:
-                    continue
-                    
-        if not data:
-             print("Error: Table found, but could not parse numerical data.")
-             return None
-
-        df = pd.DataFrame(data, columns=['At Least (USD)', 'But Less Than (USD)', 'Surcharge'])
-        df['Steps'] = (df['But Less Than (USD)'] - df['At Least (USD)']).round(2)
-        
-        # We re-use the same extrapolation logic as before
-        return extrapolate_and_expand(df)
-            
-    except Exception as e:
-        print(f"Error during browser session: {e}")
-        if 'driver' in locals():
-            driver.quit()
-        return None
-
-# (Keep all other functions like extrapolate_and_expand, send_email, and run_agent exactly as they were in the previous complete script)
-# The only function that needs to be replaced is get_live_data(). I have provided all other functions below for completeness.
-
 
 def get_date_with_suffix():
     now = datetime.now()
@@ -135,24 +69,91 @@ def extrapolate_and_expand(df):
             s += 0.01
     return pd.DataFrame(exp_rows)
 
+def get_live_data():
+    print("Launching REAL Headless Chrome Browser...")
+    
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("window-size=1920,1080")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+    try:
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+        driver.set_page_load_timeout(60) # Give the browser 60 seconds to render
+        
+        print("Navigating to UPS Website...")
+        driver.get(UPS_URL)
+        
+        print("Waiting 10 seconds for UPS Javascript to build the tables...")
+        time.sleep(10) 
+        
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        driver.quit()
+        
+        tables = soup.find_all('table')
+        target_table = None
+        for table in tables:
+            if "Gulf Coast" in table.text or "At Least" in table.text:
+                target_table = table
+                break
+        
+        if not target_table:
+            print("Error: Could not find table structure after page load.")
+            return None
+            
+        data = []
+        for row in target_table.find_all('tr'):
+            cols = [ele.text.strip() for ele in row.find_all(['td', 'th'])]
+            if len(cols) >= 3 and any(c.isdigit() for c in cols[0]):
+                try:
+                    at_least = float(cols[0].replace('$', '').replace('USD', '').strip())
+                    less_than = float(cols[1].replace('$', '').replace('USD', '').strip())
+                    surcharge = float(cols[2].replace('%', '').replace(',', '.').strip())
+                    data.append([at_least, less_than, surcharge])
+                except ValueError:
+                    continue
+                    
+        if not data: return None
+
+        df = pd.DataFrame(data, columns=['At Least (USD)', 'But Less Than (USD)', 'Surcharge'])
+        df['Steps'] = (df['But Less Than (USD)'] - df['At Least (USD)']).round(2)
+        
+        print("Data successfully extracted!")
+        return extrapolate_and_expand(df)
+            
+    except Exception as e:
+        print(f"Selenium Error: {e}")
+        if 'driver' in locals(): driver.quit()
+        return None
+
 def send_email(subject, body):
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        print("Email credentials missing. Skipping email dispatch.")
+        return
+        
     msg = MIMEMultipart()
     msg['From'] = EMAIL_SENDER
     msg['To'] = ", ".join(EMAIL_RECEIVERS)
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain'))
 
-    with open(EXCEL_FILE, "rb") as f:
-        part = MIMEApplication(f.read(), Name=os.path.basename(EXCEL_FILE))
-    part['Content-Disposition'] = f'attachment; filename="{os.path.basename(EXCEL_FILE)}"'
-    msg.attach(part)
+    if os.path.exists(EXCEL_FILE):
+        with open(EXCEL_FILE, "rb") as f:
+            part = MIMEApplication(f.read(), Name=os.path.basename(EXCEL_FILE))
+        part['Content-Disposition'] = f'attachment; filename="{os.path.basename(EXCEL_FILE)}"'
+        msg.attach(part)
 
-    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-    server.starttls()
-    server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-    server.send_message(msg)
-    server.quit()
-    print("Agent successfully dispatched email.")
+    try:
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        print("Email successfully dispatched.")
+    except Exception as e:
+        print(f"Failed to send email: {e}")
 
 def run_agent():
     today_df = get_live_data()
@@ -179,10 +180,8 @@ def run_agent():
 
         if not s_changes.empty or not st_changes.empty:
             has_changes = True
-            if not s_changes.empty:
-                email_body += f"[ALERT] Surcharge changed for {len(s_changes)} brackets.\n"
-            if not st_changes.empty:
-                email_body += f"[ALERT] Inflection Points changed for {len(st_changes)} brackets.\n"
+            if not s_changes.empty: email_body += f"[ALERT] Surcharge changed for {len(s_changes)} brackets.\n"
+            if not st_changes.empty: email_body += f"[ALERT] Inflection Points changed for {len(st_changes)} brackets.\n"
             email_body += "Please see the attached Excel file. Changed rows are highlighted in YELLOW.\n"
         else:
             email_body += "Status: No changes detected since yesterday.\n"
@@ -190,8 +189,8 @@ def run_agent():
         plt.figure(figsize=(10, 6)); plt.gca().set_facecolor('#FFFEE0')
         plt.plot(yesterday_df['At Least (USD)'], yesterday_df['Surcharge'], color='grey', linestyle='--', label='Previous')
         plt.plot(today_df['At Least (USD)'], today_df['Surcharge'], color='#351C15', linewidth=2.5, label='Current')
-        plt.title('UPS Fuel Surcharge Index', fontweight='bold')
-        plt.xlabel('Fuel Price (USD)'); plt.ylabel('Surcharge (%)'); plt.legend(); plt.savefig(TEMP_GRAPH); plt.close()
+        plt.title('UPS Fuel Surcharge Index', fontweight='bold'); plt.xlabel('Fuel Price (USD)'); plt.ylabel('Surcharge (%)')
+        plt.legend(); plt.savefig(TEMP_GRAPH); plt.close()
     else:
         email_body += "Initial baseline established.\n"
 
@@ -217,4 +216,3 @@ def run_agent():
 
 if __name__ == "__main__":
     run_agent()
-
