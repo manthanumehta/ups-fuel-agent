@@ -81,12 +81,10 @@ def get_live_data():
 
     try:
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-        driver.set_page_load_timeout(60) # Give the browser 60 seconds to render
+        driver.set_page_load_timeout(60) 
         
         print("Navigating to UPS Website...")
         driver.get(UPS_URL)
-        
-        print("Waiting 10 seconds for UPS Javascript to build the tables...")
         time.sleep(10) 
         
         soup = BeautifulSoup(driver.page_source, 'html.parser')
@@ -100,7 +98,6 @@ def get_live_data():
                 break
         
         if not target_table:
-            print("Error: Could not find table structure after page load.")
             return None
             
         data = []
@@ -120,17 +117,14 @@ def get_live_data():
         df = pd.DataFrame(data, columns=['At Least (USD)', 'But Less Than (USD)', 'Surcharge'])
         df['Steps'] = (df['But Less Than (USD)'] - df['At Least (USD)']).round(2)
         
-        print("Data successfully extracted!")
         return extrapolate_and_expand(df)
             
     except Exception as e:
-        print(f"Selenium Error: {e}")
         if 'driver' in locals(): driver.quit()
         return None
 
 def send_email(subject, body):
     if not EMAIL_SENDER or not EMAIL_PASSWORD:
-        print("Email credentials missing. Skipping email dispatch.")
         return
         
     msg = MIMEMultipart()
@@ -151,14 +145,12 @@ def send_email(subject, body):
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
         server.send_message(msg)
         server.quit()
-        print("Email successfully dispatched.")
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        pass
 
 def run_agent():
     today_df = get_live_data()
     if today_df is None: 
-        print("Agent failed to retrieve data. Shutting down.")
         return
 
     today_date_str = get_date_with_suffix()
@@ -180,9 +172,22 @@ def run_agent():
 
         if not s_changes.empty or not st_changes.empty:
             has_changes = True
-            if not s_changes.empty: email_body += f"[ALERT] Surcharge changed for {len(s_changes)} brackets.\n"
-            if not st_changes.empty: email_body += f"[ALERT] Inflection Points changed for {len(st_changes)} brackets.\n"
-            email_body += "Please see the attached Excel file. Changed rows are highlighted in YELLOW.\n"
+            
+            # --- THIS IS THE NEW LOGIC FOR THE EMAIL BODY ---
+            if not s_changes.empty: 
+                email_body += f"[ALERT] SURCHARGE RATE CHANGES DETECTED ({len(s_changes)} rows impacted)\n"
+                # We limit to printing the top 20 changes in the email to avoid making the email too long
+                for _, row in s_changes.head(20).iterrows():
+                    email_body += f"   > Price Point: ${row['At Least (USD)']} | Rate: {row['Surcharge_old']}% -> {row['Surcharge_new']}%\n"
+                email_body += "\n"
+                
+            if not st_changes.empty: 
+                email_body += f"[ALERT] INFLECTION POINT CHANGES DETECTED ({len(st_changes)} rows impacted)\n"
+                for _, row in st_changes.head(20).iterrows():
+                    email_body += f"   > Price Point: ${row['At Least (USD)']} | Step Size: {row['Steps_old']} -> {row['Steps_new']}\n"
+                email_body += "\n"
+                
+            email_body += "Please see the attached Excel file for the full data. Changed rows are highlighted in YELLOW.\n"
         else:
             email_body += "Status: No changes detected since yesterday.\n"
 
