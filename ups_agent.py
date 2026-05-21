@@ -1,5 +1,4 @@
 import pandas as pd
-import cloudscraper
 import os
 import io
 import smtplib
@@ -11,20 +10,93 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 import warnings
+import time
+
+# Selenium Imports
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+from bs4 import BeautifulSoup
 
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION ---
-UPS_URL = "https://www.ups.com/in/en/support/shipping-support/shipping-costs-rates/fuel-surcharges"
+UPS_URL = "https://www.ups.com/in/en/support/shipping-support/shipping-costs-rates/fuel-surcharges.page"
 EXCEL_FILE = "ups_fuel_history.xlsx"
 TEMP_GRAPH = "ups_plot.png"
 
 # --- EMAIL SECRETS (Passed securely from Cloud) ---
-SMTP_SERVER = "smtp.gmail.com"  # Change if using O365
+SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
-EMAIL_RECEIVERS = [EMAIL_SENDER] # Sending to yourself
+EMAIL_RECEIVERS = [EMAIL_SENDER]
+
+def get_live_data():
+    """Scrapes UPS using a real Chrome browser via Selenium."""
+    print("Launching Headless Chrome Browser for UPS...")
+    
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("window-size=1920,1080")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    
+    try:
+        print(f"Navigating to UPS URL...")
+        driver.get(UPS_URL)
+        print("Waiting 10 seconds for page to fully load...")
+        time.sleep(10) # Wait for JavaScript tables to render
+        
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        driver.quit()
+        
+        tables = soup.find_all('table')
+        target_table = None
+        for table in tables:
+            if "Gulf Coast" in table.text:
+                target_table = table
+                break
+        
+        if not target_table:
+            print("Error: Could not find table structure after page load.")
+            return None
+            
+        data = []
+        for row in target_table.find_all('tr'):
+            cols = [ele.text.strip() for ele in row.find_all(['td', 'th'])]
+            if len(cols) >= 3 and any(c.isdigit() for c in cols[0]):
+                try:
+                    at_least = float(cols[0].replace('$', '').replace('USD', '').strip())
+                    less_than = float(cols[1].replace('$', '').replace('USD', '').strip())
+                    surcharge = float(cols[2].replace('%', '').replace(',', '.').strip())
+                    data.append([at_least, less_than, surcharge])
+                except ValueError:
+                    continue
+                    
+        if not data:
+             print("Error: Table found, but could not parse numerical data.")
+             return None
+
+        df = pd.DataFrame(data, columns=['At Least (USD)', 'But Less Than (USD)', 'Surcharge'])
+        df['Steps'] = (df['But Less Than (USD)'] - df['At Least (USD)']).round(2)
+        
+        # We re-use the same extrapolation logic as before
+        return extrapolate_and_expand(df)
+            
+    except Exception as e:
+        print(f"Error during browser session: {e}")
+        if 'driver' in locals():
+            driver.quit()
+        return None
+
+# (Keep all other functions like extrapolate_and_expand, send_email, and run_agent exactly as they were in the previous complete script)
+# The only function that needs to be replaced is get_live_data(). I have provided all other functions below for completeness.
+
 
 def get_date_with_suffix():
     now = datetime.now()
@@ -63,23 +135,6 @@ def extrapolate_and_expand(df):
             s += 0.01
     return pd.DataFrame(exp_rows)
 
-def get_live_data():
-    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-    try:
-        response = scraper.get(UPS_URL, timeout=45)
-        all_tables = pd.read_html(io.StringIO(response.text), match="Gulf Coast")
-        if all_tables:
-            df = all_tables[0]
-            df.columns = ['At Least (USD)', 'But Less Than (USD)', 'Surcharge']
-            for col in ['At Least (USD)', 'But Less Than (USD)']:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace('USD', '').str.strip(), errors='coerce').round(2)
-            df['Surcharge'] = pd.to_numeric(df['Surcharge'].astype(str).str.replace('%', '').str.replace(',', '.').str.strip(), errors='coerce').round(2)
-            df['Steps'] = (df['But Less Than (USD)'] - df['At Least (USD)']).round(2)
-            return extrapolate_and_expand(df.dropna(subset=['At Least (USD)']))
-    except Exception as e:
-        print(f"Scrape failed: {e}")
-        return None
-
 def send_email(subject, body):
     msg = MIMEMultipart()
     msg['From'] = EMAIL_SENDER
@@ -101,7 +156,9 @@ def send_email(subject, body):
 
 def run_agent():
     today_df = get_live_data()
-    if today_df is None: return
+    if today_df is None: 
+        print("Agent failed to retrieve data. Shutting down.")
+        return
 
     today_date_str = get_date_with_suffix()
     changed_prices = set()
@@ -138,7 +195,6 @@ def run_agent():
     else:
         email_body += "Initial baseline established.\n"
 
-    # Save Excel
     yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
     mode = 'a' if os.path.exists(EXCEL_FILE) else 'w'
     with pd.ExcelWriter(EXCEL_FILE, engine='openpyxl', mode=mode if mode == 'a' else 'w', if_sheet_exists='replace' if mode=='a' else None) as writer:
@@ -156,9 +212,9 @@ def run_agent():
 
     if os.path.exists(TEMP_GRAPH): os.remove(TEMP_GRAPH)
     
-    # Email logic
     subject = f"UPS Surcharge Alert - {today_date_str}" if has_changes else f"UPS Surcharge Log - {today_date_str}"
     send_email(subject, email_body)
 
 if __name__ == "__main__":
     run_agent()
+
