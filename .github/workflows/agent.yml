@@ -5,26 +5,26 @@ on:
     - cron: '30 2 * * 1-5'
   workflow_dispatch:
 
+# This guarantees the agent has permission to save the Excel file
+permissions:
+  contents: write
+
 jobs:
   run-agent:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v2
-        with:
-          persist-credentials: false
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # Install all required libraries, including Selenium
       - name: Install Dependencies
         run: |
           pip install pandas openpyxl matplotlib beautifulsoup4 selenium webdriver-manager
       
-      # Install Google Chrome for Selenium to use
       - name: Install Google Chrome
         run: |
           sudo apt-get update
@@ -36,10 +36,8 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: python ups_agent.py
       
-      # Commit the updated Excel file back to the repository
       - name: Commit and Push Results
-        uses: stefanzweifel/git-auto-commit-action@v4
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Automated UPS Data Update"
           file_pattern: ups_fuel_history.xlsx
-
