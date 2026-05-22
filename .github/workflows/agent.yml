@@ -3,7 +3,7 @@ name: Morning UPS Agent
 on:
   schedule:
     # 04:30 UTC is exactly 10:00 AM IST all 7 days
-    - cron: '30 4 * * *'
+    - cron: '40 4 * * *'
   workflow_dispatch: # Allows you to run it manually anytime
 
 jobs:
