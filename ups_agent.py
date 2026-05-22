@@ -219,11 +219,29 @@ def run_agent():
         else:
             email_body += "Status: No changes detected since yesterday.\n"
 
-        plt.figure(figsize=(10, 6)); plt.gca().set_facecolor('#FFFEE0')
-        plt.plot(yesterday_df['At Least (USD)'], yesterday_df['Surcharge'], color='grey', linestyle='--', label='Previous')
-        plt.plot(today_df['At Least (USD)'], today_df['Surcharge'], color='#351C15', linewidth=2.5, label='Current')
-        plt.title('UPS Fuel Surcharge Index', fontweight='bold'); plt.xlabel('Fuel Price (USD)'); plt.ylabel('Surcharge (%)')
-        plt.legend(); plt.savefig(TEMP_GRAPH); plt.close()
+        # --- UPDATED PLOTTING SECTION ---
+        plt.figure(figsize=(10, 6))
+        plt.gca().set_facecolor('#FFFEE0')
+        
+        # 1. PREVIOUS: Thick, semi-transparent shadow
+        plt.plot(yesterday_df['At Least (USD)'], yesterday_df['Surcharge'], 
+                 color='grey', linewidth=7, alpha=0.4, label='Previous')
+        
+        # 2. CURRENT: Crisp, solid line on top
+        plt.plot(today_df['At Least (USD)'], today_df['Surcharge'], 
+                 color='#351C15', linewidth=2, label='Current')
+        
+        plt.title('UPS Fuel Surcharge Index', fontweight='bold')
+        plt.xlabel('Fuel Price (USD)')
+        plt.ylabel('Surcharge (%)')
+        
+        # Add subtle grid
+        plt.grid(True, linestyle=':', alpha=0.6) 
+        
+        plt.legend()
+        plt.savefig(TEMP_GRAPH, bbox_inches='tight')
+        plt.close()
+        # --------------------------------
     else:
         email_body += "Initial baseline established.\n"
 
