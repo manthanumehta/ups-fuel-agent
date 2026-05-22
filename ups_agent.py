@@ -40,24 +40,50 @@ def get_date_with_suffix():
 
 def extrapolate_and_expand(df):
     col_start, col_till = 'At Least (USD)', 'But Less Than (USD)'
-    step_down = df.iloc[0]['Steps']
+    
+    # ---------------------------------------------------------
+    # 1. DOWNWARD LOGIC (Calculated ONLY from Top Edge)
+    # ---------------------------------------------------------
+    price_step_down = round(df.iloc[1][col_start] - df.iloc[0][col_start], 2)
     rate_change_down = round(df.iloc[1]['Surcharge'] - df.iloc[0]['Surcharge'], 2)
+    
     down_rows = []
-    curr_s = round(df.iloc[0][col_start] - step_down, 2)
+    curr_till = df.iloc[0][col_start] 
+    curr_start = round(curr_till - price_step_down, 2)
     curr_sur = round(df.iloc[0]['Surcharge'] - rate_change_down, 2)
-    while curr_s >= 0.99:
-        down_rows.insert(0, {col_start: curr_s, col_till: round(curr_s + step_down, 2), 'Surcharge': max(0, curr_sur), 'Steps': step_down})
-        curr_s = round(curr_s - step_down, 2); curr_sur = round(curr_sur - rate_change_down, 2)
+    
+    while curr_start >= 0.99:
+        down_rows.insert(0, {
+            col_start: curr_start, col_till: curr_till, 
+            'Surcharge': max(0, curr_sur), 'Steps': price_step_down
+        })
+        curr_till = curr_start
+        curr_start = round(curr_till - price_step_down, 2)
+        curr_sur = round(curr_sur - rate_change_down, 2)
 
-    step_up = df.iloc[-1]['Steps']
+    # ---------------------------------------------------------
+    # 2. UPWARD LOGIC (Calculated ONLY from Bottom Edge)
+    # ---------------------------------------------------------
+    price_step_up = round(df.iloc[-1][col_start] - df.iloc[-2][col_start], 2)
     rate_change_up = round(df.iloc[-1]['Surcharge'] - df.iloc[-2]['Surcharge'], 2)
+    
     up_rows = []
-    curr_s = round(df.iloc[-1][col_till], 2)
+    curr_start = df.iloc[-1][col_till]
+    curr_till = round(curr_start + price_step_up, 2)
     curr_sur = round(df.iloc[-1]['Surcharge'] + rate_change_up, 2)
-    while curr_s < 5.00:
-        up_rows.append({col_start: curr_s, col_till: round(curr_s + step_up, 2), 'Surcharge': curr_sur, 'Steps': step_up})
-        curr_s = round(curr_s + step_up, 2); curr_sur = round(curr_sur + rate_change_up, 2)
+    
+    while curr_start < 5.00:
+        up_rows.append({
+            col_start: curr_start, col_till: curr_till, 
+            'Surcharge': curr_sur, 'Steps': price_step_up
+        })
+        curr_start = curr_till
+        curr_till = round(curr_start + price_step_up, 2)
+        curr_sur = round(curr_sur + rate_change_up, 2)
 
+    # ---------------------------------------------------------
+    # 3. COMBINE AND EXPAND TO 1-CENT STEPS
+    # ---------------------------------------------------------
     full_df = pd.concat([pd.DataFrame(down_rows), df, pd.DataFrame(up_rows)], ignore_index=True)
     full_df = full_df[(full_df[col_start] >= 1.00) & (full_df[col_start] < 5.00)]
 
@@ -65,8 +91,12 @@ def extrapolate_and_expand(df):
     for _, row in full_df.iterrows():
         s, t = row[col_start], row[col_till]
         while round(s, 2) < round(t, 2) and round(s, 2) < 5.00:
-            exp_rows.append({col_start: round(s, 2), col_till: t, 'Surcharge': row['Surcharge'], 'Steps': row['Steps']})
+            exp_rows.append({
+                col_start: round(s, 2), col_till: t, 
+                'Surcharge': row['Surcharge'], 'Steps': row['Steps']
+            })
             s += 0.01
+            
     return pd.DataFrame(exp_rows)
 
 def get_live_data():
@@ -173,10 +203,8 @@ def run_agent():
         if not s_changes.empty or not st_changes.empty:
             has_changes = True
             
-            # --- THIS IS THE NEW LOGIC FOR THE EMAIL BODY ---
             if not s_changes.empty: 
                 email_body += f"[ALERT] SURCHARGE RATE CHANGES DETECTED ({len(s_changes)} rows impacted)\n"
-                # We limit to printing the top 20 changes in the email to avoid making the email too long
                 for _, row in s_changes.head(20).iterrows():
                     email_body += f"   > Price Point: ${row['At Least (USD)']} | Rate: {row['Surcharge_old']}% -> {row['Surcharge_new']}%\n"
                 email_body += "\n"
