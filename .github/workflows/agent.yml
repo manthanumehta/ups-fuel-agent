@@ -2,16 +2,15 @@ name: Morning UPS Agent
 
 on:
   schedule:
-    - cron: '30 2 * * 1-5'
-  workflow_dispatch:
-
-# This guarantees the agent has permission to save the Excel file
-permissions:
-  contents: write
+    # 04:30 UTC is exactly 10:00 AM IST all 7 days
+    - cron: '30 4 * * *'
+  workflow_dispatch: # Allows you to run it manually anytime
 
 jobs:
   run-agent:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Important for saving the Excel file
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
